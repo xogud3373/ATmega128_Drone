@@ -1,0 +1,56 @@
+RAM Allocation
+Variable                                                          Address   Size
+--------------------------------------------------------------------------------
+d_count                                                           0x0500       2
+time_count                                                        0x0502       2
+alpha                                                             0x0504       4
+roll                                                              0x0508       4
+pitch                                                             0x050C       4
+yaw                                                               0x0510       4
+las_angle_gx                                                      0x0514       4
+las_angle_gy                                                      0x0518       4
+las_angle_gz                                                      0x051C       4
+dt                                                                0x0520       4
+baseAcX                                                           0x0524       4
+baseAcY                                                           0x0528       4
+baseAcZ                                                           0x052C       4
+baseGyX                                                           0x0530       4
+baseGyY                                                           0x0534       4
+baseGyZ                                                           0x0538       4
+error                                                             0x053C       4
+moterOCR1C                                                        0x0540       4
+moterOCR3B                                                        0x0544       4
+cnt_rising                                                        0x0548       4
+cnt_falling                                                       0x054C       4
+throttle                                                          0x0550       4
+stop_flag                                                         0x0554       1
+timeflag_2ms                                                      0x0555       1
+msg                                                               0x0556      40
+roll_desire_angle                                                 0x057E       4
+roll_prev_angle                                                   0x0582       4
+roll_kp                                                           0x0586       4
+roll_ki                                                           0x058A       4
+roll_kd                                                           0x058E       4
+roll_I_control                                                    0x0592       4
+roll_output                                                       0x0596       4
+pitch_desire_angle                                                0x059A       4
+pitch_prev_angle                                                  0x059E       4
+pitch_kp                                                          0x05A2       4
+pitch_ki                                                          0x05A6       4
+pitch_kd                                                          0x05AA       4
+pitch_I_control                                                   0x05AE       4
+pitch_output                                                      0x05B2       4
+_seed                                                             0x05B6       4
+
+EEPROM Allocation
+Variable                                                          Address   Size
+--------------------------------------------------------------------------------
+
+Register Allocation
+Variable                                                          Register  Size
+--------------------------------------------------------------------------------
+i                                                                 R4,R5        2
+j                                                                 R6,R7        2
+cnt                                                               R8,R9        2
+p_count                                                           R10,R11      2
+i_count                                                           R12,R13      2

@@ -1,0 +1,1957 @@
+;#include <mega128.h>
+;PCODE: $00000000 VOL: 0
+	#ifndef __SLEEP_DEFINED__
+;PCODE: $00000001 VOL: 0
+	#define __SLEEP_DEFINED__
+;PCODE: $00000002 VOL: 0
+	.EQU __se_bit=0x20
+;PCODE: $00000003 VOL: 0
+	.EQU __sm_mask=0x1C
+;PCODE: $00000004 VOL: 0
+	.EQU __sm_powerdown=0x10
+;PCODE: $00000005 VOL: 0
+	.EQU __sm_powersave=0x18
+;PCODE: $00000006 VOL: 0
+	.EQU __sm_standby=0x14
+;PCODE: $00000007 VOL: 0
+	.EQU __sm_ext_standby=0x1C
+;PCODE: $00000008 VOL: 0
+	.EQU __sm_adc_noise_red=0x08
+;PCODE: $00000009 VOL: 0
+	.SET power_ctrl_reg=mcucr
+;PCODE: $0000000A VOL: 0
+	#endif
+;PCODE: $0000000B VOL: 0
+;PCODE: $0000000C VOL: 0
+;#include <delay.h>
+;#include <stdlib.h>
+;#include <stdio.h>
+;#include <math.h>
+;
+;#define TWI_START 0x08
+;#define MT_REPEATED_START 0x10
+;#define MT_SLAW_ACK 0x18
+;#define MT_DATA_ACK 0x28
+;#define MT_SLAR_ACK 0x40
+;#define MT_DATA_NACK 0x58
+;
+;#define SR_SLA_ACK 0x60
+;#define SR_STOP 0xA0
+;#define SR_DATA_ACK 0x80
+;
+;#define Over_Time 0.0001389
+;
+;// 동작범위
+;// 모터구동 1.1ms(OCR 16220) 이상부터 구동됨.
+;// 송신기 송신 주기 = 14.8ms, 최저 값 = 1.0865ms(OCR = 16020), 최대 값 = 1.915ms (OCR =  28237)
+;#define MAX_OCR 28237   // 1.915ms
+;#define MIN_OCR 16020   // 1.0865ms
+;
+;
+;
+;
+;
+;// 변수
+;unsigned int i = 0;
+;unsigned int j = 0;
+;unsigned int cnt = 0;
+;unsigned int p_count = 0;
+;unsigned int i_count = 0;
+;unsigned int d_count = 0;
+;unsigned int time_count = 0;
+;
+;volatile float alpha = 0.98;
+
+	.DSEG
+;volatile float roll,pitch,yaw = 0;
+;volatile float las_angle_gx, las_angle_gy, las_angle_gz = 0;
+;volatile float dt = 0.000;
+;volatile float baseAcX = 0;
+;volatile float baseAcY = 0;
+;volatile float baseAcZ = 0;
+;volatile float baseGyX = 0;
+;volatile float baseGyY = 0;
+;volatile float baseGyZ = 0;
+;
+;float error;
+;float moterOCR1C;
+;float moterOCR3B;
+;
+;// LPF변수
+;float f_roll, f_pitch, pre_roll, pre_pitch;
+;
+;// 메모리 변수 선언 (인터럽트에서 쓰이는 변수들)
+;volatile long int cnt_rising= 0;
+;volatile long int cnt_falling= 0;
+;volatile long int throttle= 0;
+;
+;
+;// 플래그
+;//unsigned char start_flag = 0;   // 모터 시동 후 모터동작 플래그
+;//unsigned char power_flag = 1;   // 시작하자마자 인터럽트 동작플래그
+;unsigned char stop_flag = 0;    // 모터 정지 플래그
+;unsigned char timeflag_2ms = 0; // 2ms 플래그
+;
+;
+;// 배열
+;unsigned char msg[40] = {0,};
+;unsigned char msg1[40] = {0,};
+;
+;
+;// PID variable
+;float roll_desire_angle = 0;
+;float roll_prev_angle = 0;
+;float roll_kp = 0;
+;float roll_ki = 0;
+;float roll_kd = 0;
+;float roll_I_control = 0;
+;float roll_output = 0;
+;
+;
+;float pitch_desire_angle = 0;
+;float pitch_prev_angle = 0;
+;float pitch_kp = 0;
+;float pitch_ki = 0;
+;float pitch_kd = 0;
+;float pitch_I_control = 0;
+;float pitch_output = 0;
+;
+;
+;//float yaw_desire_angle = 0;
+;//float yaw_prev_angle = 0;
+;//float yaw_kp = 0;
+;//float yaw_ki = 0;
+;//float yaw_kd = 0;
+;//float yaw_I_control;
+;//float yaw_output;
+;
+;
+;void Init_USART1_IntCon(void)
+; 0000 0068 {
+
+	.CSEG
+;PCODE: $0000000D VOL: 0
+;PCODE: $0000000E VOL: 0
+; 0000 0069 
+; 0000 006A     // ② RXCIE1=1(수신 인터럽트 허가), RXEN0=1(수신 허가), TXEN0 = 1(송신 허가)
+; 0000 006B     UCSR1B = (1<<RXCIE1)| (1<<RXEN1)|(1 <<TXEN1);
+;PCODE: $0000000F VOL: 0
+;PCODE: $00000010 VOL: 0
+; 0000 006C     UBRR1H = 0x00;        // ③ 115200bps 보오 레이트 설정
+;PCODE: $00000011 VOL: 0
+;PCODE: $00000012 VOL: 0
+; 0000 006D     UBRR1L = 0x07;        // ③ 115200bps 보오 레이트 설정
+;PCODE: $00000013 VOL: 0
+;PCODE: $00000014 VOL: 0
+; 0000 006E     SREG  |= 0x80;        // ① 전체 인터럽트 허가
+;PCODE: $00000015 VOL: 0
+; 0000 006F }
+;PCODE: $00000016 VOL: 0
+;PCODE: $00000017 VOL: 0
+;
+;void putch_USART1(char data)            // USART1용 1문자 송신 함수
+; 0000 0072 {
+;PCODE: $00000018 VOL: 0
+;PCODE: $00000019 VOL: 0
+; 0000 0073     while(!(UCSR1A & (1<<UDRE1)));
+;	data -> Y+0
+;PCODE: $0000001A VOL: 0
+;PCODE: $0000001B VOL: 0
+;PCODE: $0000001C VOL: 0
+;PCODE: $0000001D VOL: 0
+;PCODE: $0000001E VOL: 0
+;PCODE: $0000001F VOL: 0
+; 0000 0074     UDR1 = data;
+;PCODE: $00000020 VOL: 0
+;PCODE: $00000021 VOL: 0
+; 0000 0075 }
+;PCODE: $00000022 VOL: 0
+;PCODE: $00000023 VOL: 0
+;PCODE: $00000024 VOL: 0
+;
+;void puts_USART1(char *str)        // USART1용 문자열 송신 함수
+; 0000 0078 {
+;PCODE: $00000025 VOL: 0
+;PCODE: $00000026 VOL: 0
+; 0000 0079     while(*str != 0){
+;	*str -> Y+0
+;PCODE: $00000027 VOL: 0
+;PCODE: $00000028 VOL: 0
+;PCODE: $00000029 VOL: 0
+;PCODE: $0000002A VOL: 0
+;PCODE: $0000002B VOL: 0
+; 0000 007A         putch_USART1(*str);
+;PCODE: $0000002C VOL: 0
+;PCODE: $0000002D VOL: 0
+;PCODE: $0000002E VOL: 0
+;PCODE: $0000002F VOL: 0
+; 0000 007B         str++;
+;PCODE: $00000030 VOL: 0
+;PCODE: $00000031 VOL: 0
+;PCODE: $00000032 VOL: 0
+; 0000 007C     }
+;PCODE: $00000033 VOL: 0
+;PCODE: $00000034 VOL: 0
+; 0000 007D }
+;PCODE: $00000035 VOL: 0
+;PCODE: $00000036 VOL: 0
+;PCODE: $00000037 VOL: 0
+;
+;// 인터럽트 루틴에서의 데이터 수신
+;// PID게인값조정 USART로 하기 위한 인터럽트
+;interrupt [USART1_RXC] void usart1_receive(void)    // USART1 RX Complete Handler
+; 0000 0082 {
+;PCODE: $00000038 VOL: 0
+;PCODE: $00000039 VOL: 0
+; 0000 0083     unsigned char buff;
+; 0000 0084     buff = UDR1;                                    // UDR1을 buff 버퍼에 저장한다.
+;PCODE: $0000003A VOL: 0
+;	buff -> R17
+;PCODE: $0000003B VOL: 0
+;PCODE: $0000003C VOL: 0
+; 0000 0085 
+; 0000 0086     if(buff == 'p')
+;PCODE: $0000003D VOL: 0
+;PCODE: $0000003E VOL: 0
+;PCODE: $0000003F VOL: 0
+; 0000 0087     {
+; 0000 0088         p_count++;
+;PCODE: $00000040 VOL: 0
+;PCODE: $00000041 VOL: 0
+;PCODE: $00000042 VOL: 0
+; 0000 0089         buff = 0;
+;PCODE: $00000043 VOL: 0
+;PCODE: $00000044 VOL: 0
+; 0000 008A     }
+; 0000 008B     else if(buff == 'd')
+;PCODE: $00000045 VOL: 0
+;PCODE: $00000046 VOL: 0
+;PCODE: $00000047 VOL: 0
+;PCODE: $00000048 VOL: 0
+;PCODE: $00000049 VOL: 0
+; 0000 008C     {
+; 0000 008D         p_count--;
+;PCODE: $0000004A VOL: 0
+;PCODE: $0000004B VOL: 0
+;PCODE: $0000004C VOL: 0
+; 0000 008E         buff = 0;
+;PCODE: $0000004D VOL: 0
+;PCODE: $0000004E VOL: 0
+; 0000 008F     }
+; 0000 0090     else if(buff == 'i')
+;PCODE: $0000004F VOL: 0
+;PCODE: $00000050 VOL: 0
+;PCODE: $00000051 VOL: 0
+;PCODE: $00000052 VOL: 0
+;PCODE: $00000053 VOL: 0
+; 0000 0091     {
+; 0000 0092         i_count++;
+;PCODE: $00000054 VOL: 0
+;PCODE: $00000055 VOL: 0
+;PCODE: $00000056 VOL: 0
+; 0000 0093         buff = 0;
+;PCODE: $00000057 VOL: 0
+;PCODE: $00000058 VOL: 0
+; 0000 0094     }
+; 0000 0095     else if(buff == 'w')
+;PCODE: $00000059 VOL: 0
+;PCODE: $0000005A VOL: 0
+;PCODE: $0000005B VOL: 0
+;PCODE: $0000005C VOL: 0
+;PCODE: $0000005D VOL: 0
+; 0000 0096     {
+; 0000 0097         i_count--;
+;PCODE: $0000005E VOL: 0
+;PCODE: $0000005F VOL: 0
+;PCODE: $00000060 VOL: 0
+; 0000 0098         buff = 0;
+;PCODE: $00000061 VOL: 0
+;PCODE: $00000062 VOL: 0
+; 0000 0099     }
+; 0000 009A     else if(buff == 'z')
+;PCODE: $00000063 VOL: 0
+;PCODE: $00000064 VOL: 0
+;PCODE: $00000065 VOL: 0
+;PCODE: $00000066 VOL: 0
+;PCODE: $00000067 VOL: 0
+; 0000 009B     {
+; 0000 009C         d_count++;
+;PCODE: $00000068 VOL: 0
+;PCODE: $00000069 VOL: 0
+;PCODE: $0000006A VOL: 0
+;PCODE: $0000006B VOL: 0
+; 0000 009D         buff = 0;
+;PCODE: $0000006C VOL: 0
+;PCODE: $0000006D VOL: 0
+; 0000 009E     }
+; 0000 009F     else if(buff == 'x')
+;PCODE: $0000006E VOL: 0
+;PCODE: $0000006F VOL: 0
+;PCODE: $00000070 VOL: 0
+;PCODE: $00000071 VOL: 0
+;PCODE: $00000072 VOL: 0
+; 0000 00A0     {
+; 0000 00A1         d_count--;
+;PCODE: $00000073 VOL: 0
+;PCODE: $00000074 VOL: 0
+;PCODE: $00000075 VOL: 0
+;PCODE: $00000076 VOL: 0
+; 0000 00A2         buff = 0;
+;PCODE: $00000077 VOL: 0
+;PCODE: $00000078 VOL: 0
+; 0000 00A3     }
+; 0000 00A4     else if(buff == 's')
+;PCODE: $00000079 VOL: 0
+;PCODE: $0000007A VOL: 0
+;PCODE: $0000007B VOL: 0
+;PCODE: $0000007C VOL: 0
+;PCODE: $0000007D VOL: 0
+; 0000 00A5     {
+; 0000 00A6         stop_flag = 1;
+;PCODE: $0000007E VOL: 0
+;PCODE: $0000007F VOL: 0
+; 0000 00A7     }
+; 0000 00A8 
+; 0000 00A9 
+; 0000 00AA }
+;PCODE: $00000080 VOL: 0
+;PCODE: $00000081 VOL: 0
+;PCODE: $00000082 VOL: 0
+;PCODE: $00000083 VOL: 0
+;PCODE: $00000084 VOL: 0
+;PCODE: $00000085 VOL: 0
+;PCODE: $00000086 VOL: 0
+;PCODE: $00000087 VOL: 0
+;PCODE: $00000088 VOL: 0
+;PCODE: $00000089 VOL: 0
+;PCODE: $0000008A VOL: 0
+;
+;//MPU9250 내부레지스터 주소
+;enum MPU9250_REG_ADDRESS
+;{
+;    DEVICE_ID = 0xD0,
+;    CONFIG = 0x1A,
+;    GYRO_CONFIG = 0x1B,
+;    ACCEL_CONFIG = 0x1C,
+;    ACCEL_CONFIG_2 = 0x1D,
+;    A_XOUT_H = 0x3b,
+;    A_XOUT_L = 0x3c,
+;    A_YOUT_H = 0x3d,
+;    A_YOUT_L = 0x3e,
+;    A_ZOUT_H = 0x3f,
+;    A_ZOUT_L = 0x40,
+;    G_XOUT_H = 0x43,
+;    G_XOUT_L = 0x44,
+;    G_YOUT_H = 0x45,
+;    G_YOUT_L = 0x46,
+;    G_ZOUT_H = 0x47,
+;    G_ZOUT_L = 0x48,
+;    SIGNAL_PATH_RESET = 0x68,
+;    USER_CTRL = 0x6A,
+;
+;    PWR_MGMT_1 = 0x6B,
+;    PWR_MGMT_2 = 0x6C
+;};
+;
+;void Init_TWI()
+; 0000 00C8 {
+;PCODE: $0000008B VOL: 0
+;PCODE: $0000008C VOL: 0
+; 0000 00C9     TWBR = 10;        //SCL = 100kHz, 14.7456MHz
+;PCODE: $0000008D VOL: 0
+;PCODE: $0000008E VOL: 0
+; 0000 00CA     TWCR = (1<<TWEN);   //TWI Enable
+;PCODE: $0000008F VOL: 0
+;PCODE: $00000090 VOL: 0
+; 0000 00CB     TWSR = 0x00;        //100kHz
+;PCODE: $00000091 VOL: 0
+;PCODE: $00000092 VOL: 0
+; 0000 00CC }
+;PCODE: $00000093 VOL: 0
+;PCODE: $00000094 VOL: 0
+;
+;
+;// TWI통신의 데이터를 읽는  함수.
+;unsigned char TWI_Read(unsigned char regAddr)
+; 0000 00D1 {
+;PCODE: $00000095 VOL: 0
+;PCODE: $00000096 VOL: 0
+; 0000 00D2     unsigned char Data;
+; 0000 00D3     TWCR = ((1<<TWINT)|(1<<TWEN)|(1<<TWSTA));  //Start조건 전송
+;PCODE: $00000097 VOL: 0
+;	regAddr -> Y+1
+;	Data -> R17
+;PCODE: $00000098 VOL: 0
+;PCODE: $00000099 VOL: 0
+; 0000 00D4     while(((TWCR & (1 << TWINT)) == 0x00) || ((TWSR & 0xf8)!=TWI_START));
+;PCODE: $0000009A VOL: 0
+;PCODE: $0000009B VOL: 0
+;PCODE: $0000009C VOL: 0
+;PCODE: $0000009D VOL: 0
+;PCODE: $0000009E VOL: 0
+;PCODE: $0000009F VOL: 0
+;PCODE: $000000A0 VOL: 0
+;PCODE: $000000A1 VOL: 0
+;PCODE: $000000A2 VOL: 0
+;PCODE: $000000A3 VOL: 0
+;PCODE: $000000A4 VOL: 0
+;PCODE: $000000A5 VOL: 0
+; 0000 00D5 
+; 0000 00D6     TWDR = DEVICE_ID&(~0x01);                       //쓰기 위한 주소 전송
+;PCODE: $000000A6 VOL: 0
+;PCODE: $000000A7 VOL: 0
+; 0000 00D7     TWCR = ((1<<TWINT)|(1<<TWEN));
+;PCODE: $000000A8 VOL: 0
+;PCODE: $000000A9 VOL: 0
+; 0000 00D8     while(((TWCR & (1 << TWINT)) == 0x00) || ((TWSR & 0xf8)!=MT_SLAW_ACK));
+;PCODE: $000000AA VOL: 0
+;PCODE: $000000AB VOL: 0
+;PCODE: $000000AC VOL: 0
+;PCODE: $000000AD VOL: 0
+;PCODE: $000000AE VOL: 0
+;PCODE: $000000AF VOL: 0
+;PCODE: $000000B0 VOL: 0
+;PCODE: $000000B1 VOL: 0
+;PCODE: $000000B2 VOL: 0
+;PCODE: $000000B3 VOL: 0
+;PCODE: $000000B4 VOL: 0
+;PCODE: $000000B5 VOL: 0
+; 0000 00D9 
+; 0000 00DA     TWDR = regAddr;                            //Register 주소 전송
+;PCODE: $000000B6 VOL: 0
+;PCODE: $000000B7 VOL: 0
+; 0000 00DB     TWCR = ((1<<TWINT)|(1<<TWEN));
+;PCODE: $000000B8 VOL: 0
+;PCODE: $000000B9 VOL: 0
+; 0000 00DC     while(((TWCR & (1 << TWINT)) == 0x00) || ((TWSR & 0xf8)!=MT_DATA_ACK));
+;PCODE: $000000BA VOL: 0
+;PCODE: $000000BB VOL: 0
+;PCODE: $000000BC VOL: 0
+;PCODE: $000000BD VOL: 0
+;PCODE: $000000BE VOL: 0
+;PCODE: $000000BF VOL: 0
+;PCODE: $000000C0 VOL: 0
+;PCODE: $000000C1 VOL: 0
+;PCODE: $000000C2 VOL: 0
+;PCODE: $000000C3 VOL: 0
+;PCODE: $000000C4 VOL: 0
+;PCODE: $000000C5 VOL: 0
+; 0000 00DD 
+; 0000 00DE     TWCR = ((1<<TWINT)|(1<<TWEN)|(1<<TWSTA));  //Restart 전송
+;PCODE: $000000C6 VOL: 0
+;PCODE: $000000C7 VOL: 0
+; 0000 00DF     while(((TWCR & (1 << TWINT)) == 0x00) || ((TWSR & 0xf8)!=MT_REPEATED_START));
+;PCODE: $000000C8 VOL: 0
+;PCODE: $000000C9 VOL: 0
+;PCODE: $000000CA VOL: 0
+;PCODE: $000000CB VOL: 0
+;PCODE: $000000CC VOL: 0
+;PCODE: $000000CD VOL: 0
+;PCODE: $000000CE VOL: 0
+;PCODE: $000000CF VOL: 0
+;PCODE: $000000D0 VOL: 0
+;PCODE: $000000D1 VOL: 0
+;PCODE: $000000D2 VOL: 0
+;PCODE: $000000D3 VOL: 0
+; 0000 00E0 
+; 0000 00E1     TWDR = DEVICE_ID|0x01;                          //읽기 위한 주소 전송
+;PCODE: $000000D4 VOL: 0
+;PCODE: $000000D5 VOL: 0
+; 0000 00E2     TWCR = ((1<<TWINT)|(1<<TWEN));
+;PCODE: $000000D6 VOL: 0
+;PCODE: $000000D7 VOL: 0
+; 0000 00E3     while(((TWCR & (1 << TWINT)) == 0x00) || ((TWSR & 0xf8)!=MT_SLAR_ACK));
+;PCODE: $000000D8 VOL: 0
+;PCODE: $000000D9 VOL: 0
+;PCODE: $000000DA VOL: 0
+;PCODE: $000000DB VOL: 0
+;PCODE: $000000DC VOL: 0
+;PCODE: $000000DD VOL: 0
+;PCODE: $000000DE VOL: 0
+;PCODE: $000000DF VOL: 0
+;PCODE: $000000E0 VOL: 0
+;PCODE: $000000E1 VOL: 0
+;PCODE: $000000E2 VOL: 0
+;PCODE: $000000E3 VOL: 0
+; 0000 00E4 
+; 0000 00E5 
+; 0000 00E6     TWCR = ((1<<TWINT)|(1<<TWEN));
+;PCODE: $000000E4 VOL: 0
+;PCODE: $000000E5 VOL: 0
+; 0000 00E7     while(((TWCR & (1 << TWINT)) == 0x00) || ((TWSR & 0xf8)!=MT_DATA_NACK));
+;PCODE: $000000E6 VOL: 0
+;PCODE: $000000E7 VOL: 0
+;PCODE: $000000E8 VOL: 0
+;PCODE: $000000E9 VOL: 0
+;PCODE: $000000EA VOL: 0
+;PCODE: $000000EB VOL: 0
+;PCODE: $000000EC VOL: 0
+;PCODE: $000000ED VOL: 0
+;PCODE: $000000EE VOL: 0
+;PCODE: $000000EF VOL: 0
+;PCODE: $000000F0 VOL: 0
+;PCODE: $000000F1 VOL: 0
+; 0000 00E8     Data = TWDR;                        //Data읽기
+;PCODE: $000000F2 VOL: 0
+;PCODE: $000000F3 VOL: 0
+; 0000 00E9 
+; 0000 00EA     TWCR = ((1<<TWINT)|(1<<TWEN)|(1<<TWSTO));
+;PCODE: $000000F4 VOL: 0
+;PCODE: $000000F5 VOL: 0
+; 0000 00EB 
+; 0000 00EC     return Data;
+;PCODE: $000000F6 VOL: 0
+;PCODE: $000000F7 VOL: 0
+;PCODE: $000000F8 VOL: 0
+;PCODE: $000000F9 VOL: 0
+;PCODE: $000000FA VOL: 0
+; 0000 00ED }
+;PCODE: $000000FB VOL: 0
+;
+;
+;// TWI통신의 데이터를 보내는 함수.
+;void TWI_Write(unsigned char addr, unsigned char data)
+; 0000 00F2 {
+;PCODE: $000000FC VOL: 0
+;PCODE: $000000FD VOL: 0
+; 0000 00F3 
+; 0000 00F4      TWCR = ((1<<TWINT)|(1<<TWEN)|(1<<TWSTA));      //Start조건 전송
+;	addr -> Y+1
+;	data -> Y+0
+;PCODE: $000000FE VOL: 0
+;PCODE: $000000FF VOL: 0
+; 0000 00F5      while(((TWCR & (1 << TWINT)) == 0x00) || ((TWSR & 0xf8)!=TWI_START));
+;PCODE: $00000100 VOL: 0
+;PCODE: $00000101 VOL: 0
+;PCODE: $00000102 VOL: 0
+;PCODE: $00000103 VOL: 0
+;PCODE: $00000104 VOL: 0
+;PCODE: $00000105 VOL: 0
+;PCODE: $00000106 VOL: 0
+;PCODE: $00000107 VOL: 0
+;PCODE: $00000108 VOL: 0
+;PCODE: $00000109 VOL: 0
+;PCODE: $0000010A VOL: 0
+;PCODE: $0000010B VOL: 0
+; 0000 00F6 
+; 0000 00F7      TWDR = DEVICE_ID&(~0x01);
+;PCODE: $0000010C VOL: 0
+;PCODE: $0000010D VOL: 0
+; 0000 00F8      TWCR = ((1<<TWINT)|(1<<TWEN));                 //쓰기 위한 주소 전송
+;PCODE: $0000010E VOL: 0
+;PCODE: $0000010F VOL: 0
+; 0000 00F9      while(((TWCR & (1 << TWINT)) == 0x00) || ((TWSR & 0xf8)!=MT_SLAW_ACK));
+;PCODE: $00000110 VOL: 0
+;PCODE: $00000111 VOL: 0
+;PCODE: $00000112 VOL: 0
+;PCODE: $00000113 VOL: 0
+;PCODE: $00000114 VOL: 0
+;PCODE: $00000115 VOL: 0
+;PCODE: $00000116 VOL: 0
+;PCODE: $00000117 VOL: 0
+;PCODE: $00000118 VOL: 0
+;PCODE: $00000119 VOL: 0
+;PCODE: $0000011A VOL: 0
+;PCODE: $0000011B VOL: 0
+; 0000 00FA 
+; 0000 00FB      TWDR = addr;
+;PCODE: $0000011C VOL: 0
+;PCODE: $0000011D VOL: 0
+; 0000 00FC      TWCR = ((1<<TWINT)|(1<<TWEN));                 //Register 주소 전송
+;PCODE: $0000011E VOL: 0
+;PCODE: $0000011F VOL: 0
+; 0000 00FD      while(((TWCR & (1 << TWINT)) == 0x00) || ((TWSR & 0xf8)!=MT_DATA_ACK));
+;PCODE: $00000120 VOL: 0
+;PCODE: $00000121 VOL: 0
+;PCODE: $00000122 VOL: 0
+;PCODE: $00000123 VOL: 0
+;PCODE: $00000124 VOL: 0
+;PCODE: $00000125 VOL: 0
+;PCODE: $00000126 VOL: 0
+;PCODE: $00000127 VOL: 0
+;PCODE: $00000128 VOL: 0
+;PCODE: $00000129 VOL: 0
+;PCODE: $0000012A VOL: 0
+;PCODE: $0000012B VOL: 0
+; 0000 00FE 
+; 0000 00FF      TWDR = data;
+;PCODE: $0000012C VOL: 0
+;PCODE: $0000012D VOL: 0
+; 0000 0100      TWCR = ((1<<TWINT)|(1<<TWEN));                 //Data쓰기
+;PCODE: $0000012E VOL: 0
+;PCODE: $0000012F VOL: 0
+; 0000 0101      while(((TWCR & (1 << TWINT)) == 0x00) || ((TWSR & 0xf8)!=MT_DATA_ACK));
+;PCODE: $00000130 VOL: 0
+;PCODE: $00000131 VOL: 0
+;PCODE: $00000132 VOL: 0
+;PCODE: $00000133 VOL: 0
+;PCODE: $00000134 VOL: 0
+;PCODE: $00000135 VOL: 0
+;PCODE: $00000136 VOL: 0
+;PCODE: $00000137 VOL: 0
+;PCODE: $00000138 VOL: 0
+;PCODE: $00000139 VOL: 0
+;PCODE: $0000013A VOL: 0
+;PCODE: $0000013B VOL: 0
+; 0000 0102 
+; 0000 0103      TWCR = ((1<<TWINT)|(1<<TWEN)|(1<<TWSTO));
+;PCODE: $0000013C VOL: 0
+;PCODE: $0000013D VOL: 0
+; 0000 0104 }
+;PCODE: $0000013E VOL: 0
+;PCODE: $0000013F VOL: 0
+;PCODE: $00000140 VOL: 0
+;
+;
+;void MPU9250_Init(void)
+; 0000 0108 {
+;PCODE: $00000141 VOL: 0
+;PCODE: $00000142 VOL: 0
+; 0000 0109     TWI_Write(PWR_MGMT_1, 0x80); // H_RESET[7] : 레지스터 초기화, 디폴트값 회복
+;PCODE: $00000143 VOL: 0
+;PCODE: $00000144 VOL: 0
+;PCODE: $00000145 VOL: 0
+;PCODE: $00000146 VOL: 0
+;PCODE: $00000147 VOL: 0
+; 0000 010A     delay_ms(1);                 // MPU9250 RESET delay 1ms 이상 필수
+;PCODE: $00000148 VOL: 0
+;PCODE: $00000149 VOL: 0
+;PCODE: $0000014A VOL: 0
+; 0000 010B 
+; 0000 010C     TWI_Write(SIGNAL_PATH_RESET, 0x06); // Reset gyro,accel digital signal path
+;PCODE: $0000014B VOL: 0
+;PCODE: $0000014C VOL: 0
+;PCODE: $0000014D VOL: 0
+;PCODE: $0000014E VOL: 0
+;PCODE: $0000014F VOL: 0
+; 0000 010D     TWI_Write(USER_CTRL, 0x01);  // Reset all the sensor registers
+;PCODE: $00000150 VOL: 0
+;PCODE: $00000151 VOL: 0
+;PCODE: $00000152 VOL: 0
+;PCODE: $00000153 VOL: 0
+;PCODE: $00000154 VOL: 0
+; 0000 010E     //TWI_Write(CONFIG, 0x06);
+; 0000 010F     TWI_Write(GYRO_CONFIG, 0x18); // +250dps, DLPF-3600Hz-0.11ms    0b0001 1000  A 10 B 11 C 12 D 13 E 14 F 15
+;PCODE: $00000155 VOL: 0
+;PCODE: $00000156 VOL: 0
+;PCODE: $00000157 VOL: 0
+;PCODE: $00000158 VOL: 0
+;PCODE: $00000159 VOL: 0
+; 0000 0110     TWI_Write(ACCEL_CONFIG, 0x18);  // 2g   0b0001 1000
+;PCODE: $0000015A VOL: 0
+;PCODE: $0000015B VOL: 0
+;PCODE: $0000015C VOL: 0
+;PCODE: $0000015D VOL: 0
+;PCODE: $0000015E VOL: 0
+; 0000 0111     TWI_Write(PWR_MGMT_2, 0x00);  // On gyro, accel sensor
+;PCODE: $0000015F VOL: 0
+;PCODE: $00000160 VOL: 0
+;PCODE: $00000161 VOL: 0
+;PCODE: $00000162 VOL: 0
+;PCODE: $00000163 VOL: 0
+; 0000 0112 
+; 0000 0113     // DLPF 사용 X => 0x18(16g, 2000dps)
+; 0000 0114     // DLPF 사용 O => 0
+; 0000 0115 }
+;PCODE: $00000164 VOL: 0
+;PCODE: $00000165 VOL: 0
+;
+;// 가속도센서 출력값 읽기 함수
+;void Get_Accel_Data(int *acc_x, int *acc_y, int *acc_z)
+; 0000 0119 {
+;PCODE: $00000166 VOL: 0
+;PCODE: $00000167 VOL: 0
+; 0000 011A     unsigned char dat[6];
+; 0000 011B     dat[0] = TWI_Read(A_XOUT_H);
+;PCODE: $00000168 VOL: 0
+;	*acc_x -> Y+10
+;	*acc_y -> Y+8
+;	*acc_z -> Y+6
+;	dat -> Y+0
+;PCODE: $00000169 VOL: 0
+;PCODE: $0000016A VOL: 0
+;PCODE: $0000016B VOL: 0
+;PCODE: $0000016C VOL: 0
+; 0000 011C     dat[1] = TWI_Read(A_XOUT_L);
+;PCODE: $0000016D VOL: 0
+;PCODE: $0000016E VOL: 0
+;PCODE: $0000016F VOL: 0
+;PCODE: $00000170 VOL: 0
+; 0000 011D     dat[2] = TWI_Read(A_YOUT_H);
+;PCODE: $00000171 VOL: 0
+;PCODE: $00000172 VOL: 0
+;PCODE: $00000173 VOL: 0
+;PCODE: $00000174 VOL: 0
+; 0000 011E     dat[3] = TWI_Read(A_YOUT_L);
+;PCODE: $00000175 VOL: 0
+;PCODE: $00000176 VOL: 0
+;PCODE: $00000177 VOL: 0
+;PCODE: $00000178 VOL: 0
+; 0000 011F     dat[4] = TWI_Read(A_ZOUT_H);
+;PCODE: $00000179 VOL: 0
+;PCODE: $0000017A VOL: 0
+;PCODE: $0000017B VOL: 0
+;PCODE: $0000017C VOL: 0
+; 0000 0120     dat[5] = TWI_Read(A_ZOUT_L);
+;PCODE: $0000017D VOL: 0
+;PCODE: $0000017E VOL: 0
+;PCODE: $0000017F VOL: 0
+;PCODE: $00000180 VOL: 0
+; 0000 0121 
+; 0000 0122 
+; 0000 0123     *acc_x = dat[0] << 8 | dat[1];
+;PCODE: $00000181 VOL: 0
+;PCODE: $00000182 VOL: 0
+;PCODE: $00000183 VOL: 0
+;PCODE: $00000184 VOL: 0
+;PCODE: $00000185 VOL: 0
+;PCODE: $00000186 VOL: 0
+;PCODE: $00000187 VOL: 0
+; 0000 0124     *acc_y = dat[2] << 8 | dat[3];
+;PCODE: $00000188 VOL: 0
+;PCODE: $00000189 VOL: 0
+;PCODE: $0000018A VOL: 0
+;PCODE: $0000018B VOL: 0
+;PCODE: $0000018C VOL: 0
+;PCODE: $0000018D VOL: 0
+;PCODE: $0000018E VOL: 0
+; 0000 0125     *acc_z = dat[4] << 8 | dat[5];
+;PCODE: $0000018F VOL: 0
+;PCODE: $00000190 VOL: 0
+;PCODE: $00000191 VOL: 0
+;PCODE: $00000192 VOL: 0
+;PCODE: $00000193 VOL: 0
+;PCODE: $00000194 VOL: 0
+;PCODE: $00000195 VOL: 0
+; 0000 0126 }
+;PCODE: $00000196 VOL: 0
+;PCODE: $00000197 VOL: 0
+;PCODE: $00000198 VOL: 0
+;
+;
+;// 자이로센서 출력값 읽기 함수
+;void Get_Gyro_Data(int *gyro_x, int *gyro_y, int *gyro_z)
+; 0000 012B {
+;PCODE: $00000199 VOL: 0
+;PCODE: $0000019A VOL: 0
+; 0000 012C     unsigned char dat[6];
+; 0000 012D     dat[0] = TWI_Read(G_XOUT_H);
+;PCODE: $0000019B VOL: 0
+;	*gyro_x -> Y+10
+;	*gyro_y -> Y+8
+;	*gyro_z -> Y+6
+;	dat -> Y+0
+;PCODE: $0000019C VOL: 0
+;PCODE: $0000019D VOL: 0
+;PCODE: $0000019E VOL: 0
+;PCODE: $0000019F VOL: 0
+; 0000 012E     dat[1] = TWI_Read(G_XOUT_L);
+;PCODE: $000001A0 VOL: 0
+;PCODE: $000001A1 VOL: 0
+;PCODE: $000001A2 VOL: 0
+;PCODE: $000001A3 VOL: 0
+; 0000 012F     dat[2] = TWI_Read(G_YOUT_H);
+;PCODE: $000001A4 VOL: 0
+;PCODE: $000001A5 VOL: 0
+;PCODE: $000001A6 VOL: 0
+;PCODE: $000001A7 VOL: 0
+; 0000 0130     dat[3] = TWI_Read(G_YOUT_L);
+;PCODE: $000001A8 VOL: 0
+;PCODE: $000001A9 VOL: 0
+;PCODE: $000001AA VOL: 0
+;PCODE: $000001AB VOL: 0
+; 0000 0131     dat[4] = TWI_Read(G_ZOUT_H);
+;PCODE: $000001AC VOL: 0
+;PCODE: $000001AD VOL: 0
+;PCODE: $000001AE VOL: 0
+;PCODE: $000001AF VOL: 0
+; 0000 0132     dat[5] = TWI_Read(G_ZOUT_L);
+;PCODE: $000001B0 VOL: 0
+;PCODE: $000001B1 VOL: 0
+;PCODE: $000001B2 VOL: 0
+;PCODE: $000001B3 VOL: 0
+; 0000 0133 
+; 0000 0134     *gyro_x = dat[0] << 8 | dat[1];
+;PCODE: $000001B4 VOL: 0
+;PCODE: $000001B5 VOL: 0
+;PCODE: $000001B6 VOL: 0
+;PCODE: $000001B7 VOL: 0
+;PCODE: $000001B8 VOL: 0
+;PCODE: $000001B9 VOL: 0
+;PCODE: $000001BA VOL: 0
+; 0000 0135     *gyro_y = dat[2] << 8 | dat[3];
+;PCODE: $000001BB VOL: 0
+;PCODE: $000001BC VOL: 0
+;PCODE: $000001BD VOL: 0
+;PCODE: $000001BE VOL: 0
+;PCODE: $000001BF VOL: 0
+;PCODE: $000001C0 VOL: 0
+;PCODE: $000001C1 VOL: 0
+; 0000 0136     *gyro_z = dat[4] << 8 | dat[5];
+;PCODE: $000001C2 VOL: 0
+;PCODE: $000001C3 VOL: 0
+;PCODE: $000001C4 VOL: 0
+;PCODE: $000001C5 VOL: 0
+;PCODE: $000001C6 VOL: 0
+;PCODE: $000001C7 VOL: 0
+;PCODE: $000001C8 VOL: 0
+; 0000 0137 }
+;PCODE: $000001C9 VOL: 0
+;PCODE: $000001CA VOL: 0
+;PCODE: $000001CB VOL: 0
+;
+;// IMU초기값 설정을 위한 캘리브레이션 함수
+;void Calibrate_IMU(int *acc_x, int *acc_y, int *acc_z, int *gyro_x, int *gyro_y, int *gyro_z)
+; 0000 013B {
+;PCODE: $000001CC VOL: 0
+;PCODE: $000001CD VOL: 0
+; 0000 013C     int i = 0;
+; 0000 013D     int sumAcX = 0, sumAcY = 0, sumAcZ = 0;
+; 0000 013E     int sumGyX = 0, sumGyY = 0, sumGyZ = 0;
+; 0000 013F 
+; 0000 0140     for(i = 0; i<20; i++)
+;PCODE: $000001CE VOL: 0
+;PCODE: $000001CF VOL: 0
+;PCODE: $000001D0 VOL: 0
+;PCODE: $000001D1 VOL: 0
+;PCODE: $000001D2 VOL: 0
+;PCODE: $000001D3 VOL: 0
+;PCODE: $000001D4 VOL: 0
+;PCODE: $000001D5 VOL: 0
+;PCODE: $000001D6 VOL: 0
+;PCODE: $000001D7 VOL: 0
+;PCODE: $000001D8 VOL: 0
+;PCODE: $000001D9 VOL: 0
+;PCODE: $000001DA VOL: 0
+;PCODE: $000001DB VOL: 0
+;PCODE: $000001DC VOL: 0
+;PCODE: $000001DD VOL: 0
+;PCODE: $000001DE VOL: 0
+;PCODE: $000001DF VOL: 0
+;	*acc_x -> Y+24
+;	*acc_y -> Y+22
+;	*acc_z -> Y+20
+;	*gyro_x -> Y+18
+;	*gyro_y -> Y+16
+;	*gyro_z -> Y+14
+;	i -> R16,R17
+;	sumAcX -> R18,R19
+;	sumAcY -> R20,R21
+;	sumAcZ -> Y+12
+;	sumGyX -> Y+10
+;	sumGyY -> Y+8
+;	sumGyZ -> Y+6
+;PCODE: $000001E0 VOL: 0
+;PCODE: $000001E1 VOL: 0
+;PCODE: $000001E2 VOL: 0
+;PCODE: $000001E3 VOL: 0
+;PCODE: $000001E4 VOL: 0
+;PCODE: $000001E5 VOL: 0
+;PCODE: $000001E6 VOL: 0
+;PCODE: $000001E7 VOL: 0
+;PCODE: $000001E8 VOL: 0
+;PCODE: $000001E9 VOL: 0
+;PCODE: $000001EA VOL: 0
+;PCODE: $000001EB VOL: 0
+;PCODE: $000001EC VOL: 0
+;PCODE: $000001ED VOL: 0
+;PCODE: $000001EE VOL: 0
+; 0000 0141     {
+; 0000 0142         Get_Accel_Data(acc_x, acc_y, acc_z);
+;PCODE: $000001EF VOL: 0
+;PCODE: $000001F0 VOL: 0
+;PCODE: $000001F1 VOL: 0
+;PCODE: $000001F2 VOL: 0
+;PCODE: $000001F3 VOL: 0
+;PCODE: $000001F4 VOL: 0
+;PCODE: $000001F5 VOL: 0
+; 0000 0143         Get_Gyro_Data(gyro_x, gyro_y, gyro_z);
+;PCODE: $000001F6 VOL: 0
+;PCODE: $000001F7 VOL: 0
+;PCODE: $000001F8 VOL: 0
+;PCODE: $000001F9 VOL: 0
+;PCODE: $000001FA VOL: 0
+;PCODE: $000001FB VOL: 0
+;PCODE: $000001FC VOL: 0
+; 0000 0144         sumAcX += acc_x; sumAcY += acc_y; sumAcZ += acc_z;
+;PCODE: $000001FD VOL: 0
+;PCODE: $000001FE VOL: 0
+;PCODE: $000001FF VOL: 0
+;PCODE: $00000200 VOL: 0
+;PCODE: $00000201 VOL: 0
+;PCODE: $00000202 VOL: 0
+;PCODE: $00000203 VOL: 0
+;PCODE: $00000204 VOL: 0
+;PCODE: $00000205 VOL: 0
+;PCODE: $00000206 VOL: 0
+;PCODE: $00000207 VOL: 0
+;PCODE: $00000208 VOL: 0
+;PCODE: $00000209 VOL: 0
+;PCODE: $0000020A VOL: 0
+;PCODE: $0000020B VOL: 0
+; 0000 0145         sumGyX += gyro_x; sumGyY += gyro_y; sumGyZ += gyro_z;
+;PCODE: $0000020C VOL: 0
+;PCODE: $0000020D VOL: 0
+;PCODE: $0000020E VOL: 0
+;PCODE: $0000020F VOL: 0
+;PCODE: $00000210 VOL: 0
+;PCODE: $00000211 VOL: 0
+;PCODE: $00000212 VOL: 0
+;PCODE: $00000213 VOL: 0
+;PCODE: $00000214 VOL: 0
+;PCODE: $00000215 VOL: 0
+;PCODE: $00000216 VOL: 0
+;PCODE: $00000217 VOL: 0
+;PCODE: $00000218 VOL: 0
+;PCODE: $00000219 VOL: 0
+;PCODE: $0000021A VOL: 0
+; 0000 0146         delay_ms(1);
+;PCODE: $0000021B VOL: 0
+;PCODE: $0000021C VOL: 0
+;PCODE: $0000021D VOL: 0
+; 0000 0147     }
+;PCODE: $0000021E VOL: 0
+;PCODE: $0000021F VOL: 0
+;PCODE: $00000220 VOL: 0
+;PCODE: $00000221 VOL: 0
+;PCODE: $00000222 VOL: 0
+; 0000 0148 
+; 0000 0149     baseAcX = sumAcX / 20;
+;PCODE: $00000223 VOL: 0
+;PCODE: $00000224 VOL: 0
+;PCODE: $00000225 VOL: 0
+;PCODE: $00000226 VOL: 1
+;PCODE: $00000227 VOL: 0
+;PCODE: $00000228 VOL: 0
+; 0000 014A     baseAcY = sumAcY / 20;
+;PCODE: $00000229 VOL: 0
+;PCODE: $0000022A VOL: 0
+;PCODE: $0000022B VOL: 0
+;PCODE: $0000022C VOL: 1
+;PCODE: $0000022D VOL: 0
+;PCODE: $0000022E VOL: 0
+; 0000 014B     baseAcZ = sumAcZ / 20;
+;PCODE: $0000022F VOL: 0
+;PCODE: $00000230 VOL: 0
+;PCODE: $00000231 VOL: 0
+;PCODE: $00000232 VOL: 1
+;PCODE: $00000233 VOL: 0
+;PCODE: $00000234 VOL: 0
+; 0000 014C     baseGyX = sumGyX / 20;
+;PCODE: $00000235 VOL: 0
+;PCODE: $00000236 VOL: 0
+;PCODE: $00000237 VOL: 0
+;PCODE: $00000238 VOL: 1
+;PCODE: $00000239 VOL: 0
+;PCODE: $0000023A VOL: 0
+; 0000 014D     baseGyY = sumGyY / 20;
+;PCODE: $0000023B VOL: 0
+;PCODE: $0000023C VOL: 0
+;PCODE: $0000023D VOL: 0
+;PCODE: $0000023E VOL: 1
+;PCODE: $0000023F VOL: 0
+;PCODE: $00000240 VOL: 0
+; 0000 014E     baseGyZ = sumGyZ / 20;
+;PCODE: $00000241 VOL: 0
+;PCODE: $00000242 VOL: 0
+;PCODE: $00000243 VOL: 0
+;PCODE: $00000244 VOL: 1
+;PCODE: $00000245 VOL: 0
+;PCODE: $00000246 VOL: 0
+; 0000 014F }
+;PCODE: $00000247 VOL: 0
+;PCODE: $00000248 VOL: 0
+;PCODE: $00000249 VOL: 0
+;PCODE: $0000024A VOL: 0
+;
+;
+;/**
+;  *@brief MPU9250 측정값 -> 가속도 변환 함수
+;  *@param a_x : x축 가속도 값을 g단위로 저장하여 저장할 변수의 참조 값
+;  *@param a_y : y축 가속도 값을 g단위로 저장하여 저장할 변수의 참조 값
+;  *@param a_z : z축 가속도 값을 g단위로 저장하여 저장할 변수의 참조 값
+;  *@param acc_x : 관성센서로 측정된 x축 가속도의 측정값
+;  *@param acc_y : 관성센서로 측정된 y축 가속도의 측정값
+;  *@param acc_z : 관성센서로 측정된 z축 가속도의 측정값
+;  */
+;void Conv_Value_Acc(float *a_x, float *a_y, float *a_z, int acc_x, int acc_y, int acc_z)
+; 0000 015C {
+;PCODE: $0000024B VOL: 0
+;PCODE: $0000024C VOL: 0
+; 0000 015D 
+; 0000 015E     *a_x = (float)acc_x/2048; //가속도 g단위 변환
+;	*a_x -> Y+10
+;	*a_y -> Y+8
+;	*a_z -> Y+6
+;	acc_x -> Y+4
+;	acc_y -> Y+2
+;	acc_z -> Y+0
+;PCODE: $0000024D VOL: 0
+;PCODE: $0000024E VOL: 0
+;PCODE: $0000024F VOL: 0
+;PCODE: $00000250 VOL: 0
+;PCODE: $00000251 VOL: 0
+;PCODE: $00000252 VOL: 0
+;PCODE: $00000253 VOL: 0
+; 0000 015F     *a_y = (float)acc_y/2048;  // 16g => 2048
+;PCODE: $00000254 VOL: 0
+;PCODE: $00000255 VOL: 0
+;PCODE: $00000256 VOL: 0
+;PCODE: $00000257 VOL: 0
+;PCODE: $00000258 VOL: 0
+;PCODE: $00000259 VOL: 0
+;PCODE: $0000025A VOL: 0
+; 0000 0160     *a_z = (float)acc_z/2048;
+;PCODE: $0000025B VOL: 0
+;PCODE: $0000025C VOL: 0
+;PCODE: $0000025D VOL: 0
+;PCODE: $0000025E VOL: 0
+;PCODE: $0000025F VOL: 0
+;PCODE: $00000260 VOL: 0
+;PCODE: $00000261 VOL: 0
+; 0000 0161 }
+;PCODE: $00000262 VOL: 0
+;PCODE: $00000263 VOL: 0
+;PCODE: $00000264 VOL: 0
+;
+;
+;/**
+;  *@brief MPU9250 측정값 -> 가각속도 변환 함수
+;  *@param g_x : x축 각속도 값을 DPG단위로 저장하여 저장할 변수의 참조 값
+;  *@param g_y : y축 각속도 값을 DPG단위로 저장하여 저장할 변수의 참조 값
+;  *@param g_z : z축 각속도 값을 DPG단위로 저장하여 저장할 변수의 참조 값
+;  *@param gyro_x : 관성센서로 측정된 x축 각속도의 측정값
+;  *@param gyro_y : 관성센서로 측정된 y축 각속도의 측정값
+;  *@param gyro_z : 관성센서로 측정된 z축 각속도의 측정값
+;  */
+;void Conv_Value_Gyro(float *g_x, float *g_y, float *g_z, int gyro_x, int gyro_y, int gyro_z)
+; 0000 016E {
+;PCODE: $00000265 VOL: 0
+;PCODE: $00000266 VOL: 0
+; 0000 016F     *g_x = (float)(gyro_x - baseGyX) / 16.384; //각속도 변환 131
+;	*g_x -> Y+10
+;	*g_y -> Y+8
+;	*g_z -> Y+6
+;	gyro_x -> Y+4
+;	gyro_y -> Y+2
+;	gyro_z -> Y+0
+;PCODE: $00000267 VOL: 1
+;PCODE: $00000268 VOL: 0
+;PCODE: $00000269 VOL: 0
+;PCODE: $0000026A VOL: 0
+;PCODE: $0000026B VOL: 0
+;PCODE: $0000026C VOL: 0
+;PCODE: $0000026D VOL: 0
+;PCODE: $0000026E VOL: 0
+;PCODE: $0000026F VOL: 0
+;PCODE: $00000270 VOL: 0
+; 0000 0170     *g_y = (float)(gyro_y - baseGyY) / 16.384;
+;PCODE: $00000271 VOL: 1
+;PCODE: $00000272 VOL: 0
+;PCODE: $00000273 VOL: 0
+;PCODE: $00000274 VOL: 0
+;PCODE: $00000275 VOL: 0
+;PCODE: $00000276 VOL: 0
+;PCODE: $00000277 VOL: 0
+;PCODE: $00000278 VOL: 0
+;PCODE: $00000279 VOL: 0
+;PCODE: $0000027A VOL: 0
+; 0000 0171     *g_z = (float)(gyro_z - baseGyZ) / 16.384;
+;PCODE: $0000027B VOL: 1
+;PCODE: $0000027C VOL: 0
+;PCODE: $0000027D VOL: 0
+;PCODE: $0000027E VOL: 0
+;PCODE: $0000027F VOL: 0
+;PCODE: $00000280 VOL: 0
+;PCODE: $00000281 VOL: 0
+;PCODE: $00000282 VOL: 0
+;PCODE: $00000283 VOL: 0
+;PCODE: $00000284 VOL: 0
+; 0000 0172 }
+;PCODE: $00000285 VOL: 0
+;PCODE: $00000286 VOL: 0
+;PCODE: $00000287 VOL: 0
+;
+;
+;// IMU dt값 구하기 위한 타이머초기화
+;void Timer_Init_IMU(void)
+; 0000 0177 {
+;PCODE: $00000288 VOL: 0
+;PCODE: $00000289 VOL: 0
+; 0000 0178     TCCR0 = (1<<CS01);     // Normal 모드, 14.7456MHz 8분주, 0.542us
+;PCODE: $0000028A VOL: 0
+;PCODE: $0000028B VOL: 0
+; 0000 0179     TCNT0 = 0;
+;PCODE: $0000028C VOL: 0
+;PCODE: $0000028D VOL: 0
+; 0000 017A     TIMSK |= (1<<TOIE0);
+;PCODE: $0000028E VOL: 0
+;PCODE: $0000028F VOL: 0
+;PCODE: $00000290 VOL: 0
+; 0000 017B }
+;PCODE: $00000291 VOL: 0
+;PCODE: $00000292 VOL: 0
+;
+;// 드론 모터 타이머
+;void Init_Timer1_BLDC(void)
+; 0000 017F {
+;PCODE: $00000293 VOL: 0
+;PCODE: $00000294 VOL: 0
+; 0000 0180   // COM1A1 : OC1A핀 출력(PB5) , WGM12~WGM10 : Fast PWM(TOP = ICR1)
+; 0000 0181   // COM1B1 : OC1B핀 출력(PB6)
+; 0000 0182   // COM1C1 : OC1C핀 출력(PB7)
+; 0000 0183   TCCR1A |= (1<<COM1A1)|(1<<COM1B1)|(1<<WGM11) | (1<<COM1C1);
+;PCODE: $00000295 VOL: 0
+;PCODE: $00000296 VOL: 0
+;PCODE: $00000297 VOL: 0
+; 0000 0184   TCCR1B |= (1<<WGM13)|(1<<WGM12)|(1<<CS10);  // 1분주 14.7456MHz
+;PCODE: $00000298 VOL: 0
+;PCODE: $00000299 VOL: 0
+;PCODE: $0000029A VOL: 0
+; 0000 0185   //TIMSK =  (1<<TOIE1); // compare match interrupt set, overflow interrupt (1<< OCIE1A) | (1<< OCIE1B)
+; 0000 0186 
+; 0000 0187 
+; 0000 0188   TCNT1 = 0x00;
+;PCODE: $0000029B VOL: 0
+;PCODE: $0000029C VOL: 0
+; 0000 0189   ICR1 = 36864;  // TOP값  2500us = 2.5ms
+;PCODE: $0000029D VOL: 0
+;PCODE: $0000029E VOL: 0
+; 0000 018A 
+; 0000 018B }
+;PCODE: $0000029F VOL: 0
+;PCODE: $000002A0 VOL: 0
+;
+;// 드론 모터 타이머
+;void Init_Timer3_BLDC(void)
+; 0000 018F {
+;PCODE: $000002A1 VOL: 0
+;PCODE: $000002A2 VOL: 0
+; 0000 0190     // COM3B1 : OC3B핀 출력(PE4) , WGM33~WGM30 : Fast PWM(TOP = ICR1)
+; 0000 0191 
+; 0000 0192     TCCR3A |= (1<< COM3B1)| (1<<WGM31);
+;PCODE: $000002A3 VOL: 0
+;PCODE: $000002A4 VOL: 0
+;PCODE: $000002A5 VOL: 0
+; 0000 0193     TCCR3B |= (1<< WGM33)| (1<< WGM32)|(1<<CS30);   // 1분주 14.7456MHz
+;PCODE: $000002A6 VOL: 0
+;PCODE: $000002A7 VOL: 0
+;PCODE: $000002A8 VOL: 0
+; 0000 0194     //ETIMSK =  (1<< TOIE3); // | (1<< OCIE3B); (1<< OCIE3A)
+; 0000 0195 
+; 0000 0196     TCNT3H = 0x00;
+;PCODE: $000002A9 VOL: 0
+;PCODE: $000002AA VOL: 0
+; 0000 0197     TCNT3L = 0x00;
+;PCODE: $000002AB VOL: 0
+;PCODE: $000002AC VOL: 0
+; 0000 0198 
+; 0000 0199     ICR3H = 36864 >> 8;
+;PCODE: $000002AD VOL: 0
+;PCODE: $000002AE VOL: 0
+; 0000 019A     ICR3L = 36864 & 0xFF; // TOP값  2500us = 2.5ms
+;PCODE: $000002AF VOL: 0
+;PCODE: $000002B0 VOL: 0
+; 0000 019B 
+; 0000 019C }
+;PCODE: $000002B1 VOL: 0
+;PCODE: $000002B2 VOL: 0
+;
+;// dt값 계산을 위한 카운터값 증가
+;interrupt [TIM0_OVF] void tim0_overflow(void)
+; 0000 01A0 {
+;PCODE: $000002B3 VOL: 0
+;PCODE: $000002B4 VOL: 0
+; 0000 01A1     cnt++;                   // IMU dt값 구하기 위한 카운터값
+;PCODE: $000002B5 VOL: 0
+;PCODE: $000002B6 VOL: 0
+;PCODE: $000002B7 VOL: 0
+; 0000 01A2     time_count++;            // sprintf값을 위한 카운터값
+;PCODE: $000002B8 VOL: 0
+;PCODE: $000002B9 VOL: 0
+;PCODE: $000002BA VOL: 0
+;PCODE: $000002BB VOL: 0
+; 0000 01A3     if(time_count >= 14)
+;PCODE: $000002BC VOL: 0
+;PCODE: $000002BD VOL: 0
+;PCODE: $000002BE VOL: 0
+; 0000 01A4     {
+; 0000 01A5         timeflag_2ms = 1;
+;PCODE: $000002BF VOL: 0
+;PCODE: $000002C0 VOL: 0
+; 0000 01A6     }
+; 0000 01A7 }
+;PCODE: $000002C1 VOL: 0
+;PCODE: $000002C2 VOL: 0
+;PCODE: $000002C3 VOL: 0
+;PCODE: $000002C4 VOL: 0
+;
+;// 송신기 THROTTLE 주기값 받기 인터럽트
+;interrupt [EXT_INT5] void ext_int5_isr(void)
+; 0000 01AB {
+;PCODE: $000002C5 VOL: 0
+;PCODE: $000002C6 VOL: 0
+; 0000 01AC       if(PINE.5 == 1)                         // 상승엣지
+;PCODE: $000002C7 VOL: 0
+;PCODE: $000002C8 VOL: 0
+;PCODE: $000002C9 VOL: 0
+; 0000 01AD       {
+; 0000 01AE              cnt_rising = TCNT1;              // TCNT1 카운터값 read
+;PCODE: $000002CA VOL: 0
+;PCODE: $000002CB VOL: 0
+;PCODE: $000002CC VOL: 1
+; 0000 01AF       }
+; 0000 01B0       else
+;PCODE: $000002CD VOL: 0
+;PCODE: $000002CE VOL: 0
+; 0000 01B1       {
+; 0000 01B2              cnt_falling = TCNT1;             // TCNT1 카운터값 read
+;PCODE: $000002CF VOL: 0
+;PCODE: $000002D0 VOL: 0
+;PCODE: $000002D1 VOL: 1
+; 0000 01B3 
+; 0000 01B4              throttle = (36865- cnt_rising + cnt_falling) % 36865;
+;PCODE: $000002D2 VOL: 0
+;PCODE: $000002D3 VOL: 1
+;PCODE: $000002D4 VOL: 0
+;PCODE: $000002D5 VOL: 1
+;PCODE: $000002D6 VOL: 0
+;PCODE: $000002D7 VOL: 0
+;PCODE: $000002D8 VOL: 0
+;PCODE: $000002D9 VOL: 1
+; 0000 01B5       }
+;PCODE: $000002DA VOL: 0
+; 0000 01B6 
+; 0000 01B7 }
+;PCODE: $000002DB VOL: 0
+;PCODE: $000002DC VOL: 0
+;PCODE: $000002DD VOL: 0
+;
+;
+;#define ts 2.5         // 샘플링 시간
+;#define tau 0.5         // 시정수
+;void Lowpass_filter(float *range, float *pre_range, float *now_range)
+; 0000 01BD {
+;PCODE: $000002DE VOL: 0
+;PCODE: $000002DF VOL: 0
+; 0000 01BE     *range = (tau * (*pre_range) + ((float)ts/1000) * (*now_range)) / (tau +((float)ts/1000)) ;
+;	*range -> Y+4
+;	*pre_range -> Y+2
+;	*now_range -> Y+0
+;PCODE: $000002E0 VOL: 0
+;PCODE: $000002E1 VOL: 0
+;PCODE: $000002E2 VOL: 0
+;PCODE: $000002E3 VOL: 0
+;PCODE: $000002E4 VOL: 0
+;PCODE: $000002E5 VOL: 0
+;PCODE: $000002E6 VOL: 0
+;PCODE: $000002E7 VOL: 0
+;PCODE: $000002E8 VOL: 0
+;PCODE: $000002E9 VOL: 0
+;PCODE: $000002EA VOL: 0
+;PCODE: $000002EB VOL: 0
+;PCODE: $000002EC VOL: 0
+;PCODE: $000002ED VOL: 0
+;PCODE: $000002EE VOL: 0
+;PCODE: $000002EF VOL: 0
+; 0000 01BF }
+;PCODE: $000002F0 VOL: 0
+;PCODE: $000002F1 VOL: 0
+;PCODE: $000002F2 VOL: 0
+;
+;
+;// PID함수
+;void StdPID(float *desire, float *current_angle, float *prev_angle, float *I_control, float *Kp, float *Ki, float *Kd, float *PID_control)
+; 0000 01C4 {
+;PCODE: $000002F3 VOL: 0
+;PCODE: $000002F4 VOL: 0
+; 0000 01C5 
+; 0000 01C6     float dInput;
+; 0000 01C7     float P_control;
+; 0000 01C8     float D_control;
+; 0000 01C9 
+; 0000 01CA 
+; 0000 01CB     error = *desire - *current_angle;        // 에러값
+;PCODE: $000002F5 VOL: 0
+;	*desire -> Y+26
+;	*current_angle -> Y+24
+;	*prev_angle -> Y+22
+;	*I_control -> Y+20
+;	*Kp -> Y+18
+;	*Ki -> Y+16
+;	*Kd -> Y+14
+;	*PID_control -> Y+12
+;	dInput -> Y+8
+;	P_control -> Y+4
+;	D_control -> Y+0
+;PCODE: $000002F6 VOL: 0
+;PCODE: $000002F7 VOL: 0
+;PCODE: $000002F8 VOL: 0
+;PCODE: $000002F9 VOL: 0
+;PCODE: $000002FA VOL: 0
+;PCODE: $000002FB VOL: 0
+;PCODE: $000002FC VOL: 0
+;PCODE: $000002FD VOL: 0
+;PCODE: $000002FE VOL: 0
+; 0000 01CC     dInput = *current_angle - *prev_angle;
+;PCODE: $000002FF VOL: 0
+;PCODE: $00000300 VOL: 0
+;PCODE: $00000301 VOL: 0
+;PCODE: $00000302 VOL: 0
+;PCODE: $00000303 VOL: 0
+;PCODE: $00000304 VOL: 0
+;PCODE: $00000305 VOL: 0
+;PCODE: $00000306 VOL: 0
+;PCODE: $00000307 VOL: 0
+; 0000 01CD     *prev_angle = *current_angle;
+;PCODE: $00000308 VOL: 0
+;PCODE: $00000309 VOL: 0
+;PCODE: $0000030A VOL: 0
+;PCODE: $0000030B VOL: 0
+; 0000 01CE 
+; 0000 01CF     P_control = (*Kp) * error;
+;PCODE: $0000030C VOL: 0
+;PCODE: $0000030D VOL: 0
+;PCODE: $0000030E VOL: 0
+;PCODE: $0000030F VOL: 0
+;PCODE: $00000310 VOL: 0
+; 0000 01D0     *I_control += (*Ki) * (error * dt);
+;PCODE: $00000311 VOL: 0
+;PCODE: $00000312 VOL: 0
+;PCODE: $00000313 VOL: 0
+;PCODE: $00000314 VOL: 0
+;PCODE: $00000315 VOL: 0
+;PCODE: $00000316 VOL: 0
+;PCODE: $00000317 VOL: 0
+;PCODE: $00000318 VOL: 1
+;PCODE: $00000319 VOL: 0
+;PCODE: $0000031A VOL: 0
+;PCODE: $0000031B VOL: 0
+;PCODE: $0000031C VOL: 0
+;PCODE: $0000031D VOL: 0
+;PCODE: $0000031E VOL: 0
+;PCODE: $0000031F VOL: 0
+;PCODE: $00000320 VOL: 0
+; 0000 01D1     D_control = -(*Kd) * (dInput/ dt);
+;PCODE: $00000321 VOL: 0
+;PCODE: $00000322 VOL: 0
+;PCODE: $00000323 VOL: 0
+;PCODE: $00000324 VOL: 0
+;PCODE: $00000325 VOL: 1
+;PCODE: $00000326 VOL: 0
+;PCODE: $00000327 VOL: 0
+;PCODE: $00000328 VOL: 0
+;PCODE: $00000329 VOL: 0
+;PCODE: $0000032A VOL: 0
+; 0000 01D2 
+; 0000 01D3 
+; 0000 01D4     *PID_control = P_control + *I_control + D_control;  // PID 출력
+;PCODE: $0000032B VOL: 0
+;PCODE: $0000032C VOL: 0
+;PCODE: $0000032D VOL: 0
+;PCODE: $0000032E VOL: 0
+;PCODE: $0000032F VOL: 0
+;PCODE: $00000330 VOL: 0
+;PCODE: $00000331 VOL: 0
+;PCODE: $00000332 VOL: 0
+; 0000 01D5 //    sprintf(msg1,"error %.3f Pitch_kp %.3f \n", error, pitch_kp);
+; 0000 01D6 //    puts_USART1(msg1);   //문자열 msg1출력
+; 0000 01D7 }
+;PCODE: $00000333 VOL: 0
+;PCODE: $00000334 VOL: 0
+;PCODE: $00000335 VOL: 0
+;
+;void CalcMotorPID()
+; 0000 01DA {
+;PCODE: $00000336 VOL: 0
+;PCODE: $00000337 VOL: 0
+; 0000 01DB 
+; 0000 01DC     //roll_kp = (p_count * 0.002);
+; 0000 01DD     pitch_kp = (p_count * 1);
+;PCODE: $00000338 VOL: 0
+;PCODE: $00000339 VOL: 0
+;PCODE: $0000033A VOL: 0
+;PCODE: $0000033B VOL: 0
+; 0000 01DE     //roll_ki = (i_count * 0.01);
+; 0000 01DF     pitch_ki = (i_count * 1);
+;PCODE: $0000033C VOL: 0
+;PCODE: $0000033D VOL: 0
+;PCODE: $0000033E VOL: 0
+;PCODE: $0000033F VOL: 0
+; 0000 01E0     //roll_kd = (d_count * 0.01);
+; 0000 01E1     pitch_kd = (d_count * 1);
+;PCODE: $00000340 VOL: 0
+;PCODE: $00000341 VOL: 0
+;PCODE: $00000342 VOL: 0
+;PCODE: $00000343 VOL: 0
+;PCODE: $00000344 VOL: 0
+;PCODE: $00000345 VOL: 0
+; 0000 01E2 
+; 0000 01E3 
+; 0000 01E4     StdPID(&roll_desire_angle, &f_roll, &roll_prev_angle, &roll_I_control, &roll_kp, &roll_ki, &roll_kd, &roll_output);
+;PCODE: $00000346 VOL: 0
+;PCODE: $00000347 VOL: 0
+;PCODE: $00000348 VOL: 0
+;PCODE: $00000349 VOL: 0
+;PCODE: $0000034A VOL: 0
+;PCODE: $0000034B VOL: 0
+;PCODE: $0000034C VOL: 0
+;PCODE: $0000034D VOL: 0
+;PCODE: $0000034E VOL: 0
+;PCODE: $0000034F VOL: 0
+;PCODE: $00000350 VOL: 0
+;PCODE: $00000351 VOL: 0
+;PCODE: $00000352 VOL: 0
+;PCODE: $00000353 VOL: 0
+;PCODE: $00000354 VOL: 0
+;PCODE: $00000355 VOL: 0
+;PCODE: $00000356 VOL: 0
+; 0000 01E5     StdPID(&pitch_desire_angle, &f_pitch, &pitch_prev_angle, &pitch_I_control, &pitch_kp, &pitch_ki, &pitch_kd, &pitch_output);
+;PCODE: $00000357 VOL: 0
+;PCODE: $00000358 VOL: 0
+;PCODE: $00000359 VOL: 0
+;PCODE: $0000035A VOL: 0
+;PCODE: $0000035B VOL: 0
+;PCODE: $0000035C VOL: 0
+;PCODE: $0000035D VOL: 0
+;PCODE: $0000035E VOL: 0
+;PCODE: $0000035F VOL: 0
+;PCODE: $00000360 VOL: 0
+;PCODE: $00000361 VOL: 0
+;PCODE: $00000362 VOL: 0
+;PCODE: $00000363 VOL: 0
+;PCODE: $00000364 VOL: 0
+;PCODE: $00000365 VOL: 0
+;PCODE: $00000366 VOL: 0
+;PCODE: $00000367 VOL: 0
+; 0000 01E6 //    StdPID(&roll_desire_angle, &roll, &roll_prev_angle, &roll_I_control, &roll_kp, &roll_ki, &roll_kd, &roll_output);
+; 0000 01E7 //    StdPID(&pitch_desire_angle, &pitch, &pitch_prev_angle, &pitch_I_control, &pitch_kp, &pitch_ki, &pitch_kd, &pitch_output);
+; 0000 01E8 
+; 0000 01E9 }
+;PCODE: $00000368 VOL: 0
+;PCODE: $00000369 VOL: 0
+;
+;
+;void MotorSpeed()
+; 0000 01ED {
+;PCODE: $0000036A VOL: 0
+;PCODE: $0000036B VOL: 0
+; 0000 01EE //    int OCR1CW;
+; 0000 01EF //    int OCR3BW;
+; 0000 01F0 
+; 0000 01F1 //    if(throttle > 25000 && throttle < 26000)
+; 0000 01F2 //    {
+; 0000 01F3 //        throttle = 26500;
+; 0000 01F4 //    }
+; 0000 01F5 
+; 0000 01F6     OCR1A = throttle - roll_output + pitch_output;
+;PCODE: $0000036C VOL: 0
+;PCODE: $0000036D VOL: 1
+;PCODE: $0000036E VOL: 0
+;PCODE: $0000036F VOL: 0
+;PCODE: $00000370 VOL: 0
+;PCODE: $00000371 VOL: 0
+;PCODE: $00000372 VOL: 0
+;PCODE: $00000373 VOL: 0
+;PCODE: $00000374 VOL: 0
+; 0000 01F7     moterOCR3B = (throttle + roll_output + pitch_output);
+;PCODE: $00000375 VOL: 0
+;PCODE: $00000376 VOL: 1
+;PCODE: $00000377 VOL: 0
+;PCODE: $00000378 VOL: 0
+;PCODE: $00000379 VOL: 0
+;PCODE: $0000037A VOL: 0
+;PCODE: $0000037B VOL: 0
+; 0000 01F8 
+; 0000 01F9     OCR1B = throttle - roll_output - pitch_output;
+;PCODE: $0000037C VOL: 0
+;PCODE: $0000037D VOL: 1
+;PCODE: $0000037E VOL: 0
+;PCODE: $0000037F VOL: 0
+;PCODE: $00000380 VOL: 0
+;PCODE: $00000381 VOL: 0
+;PCODE: $00000382 VOL: 0
+;PCODE: $00000383 VOL: 0
+;PCODE: $00000384 VOL: 0
+; 0000 01FA     moterOCR1C = (throttle + roll_output - pitch_output);
+;PCODE: $00000385 VOL: 0
+;PCODE: $00000386 VOL: 1
+;PCODE: $00000387 VOL: 0
+;PCODE: $00000388 VOL: 0
+;PCODE: $00000389 VOL: 0
+;PCODE: $0000038A VOL: 0
+;PCODE: $0000038B VOL: 0
+; 0000 01FB 
+; 0000 01FC     OCR1CH = (int)(moterOCR1C) >> 8;
+;PCODE: $0000038C VOL: 0
+;PCODE: $0000038D VOL: 0
+;PCODE: $0000038E VOL: 0
+;PCODE: $0000038F VOL: 0
+; 0000 01FD     OCR1CL = (int)(moterOCR1C) & 0xff;
+;PCODE: $00000390 VOL: 0
+;PCODE: $00000391 VOL: 0
+;PCODE: $00000392 VOL: 0
+;PCODE: $00000393 VOL: 0
+; 0000 01FE 
+; 0000 01FF     OCR3BH = (int)moterOCR3B >> 8;
+;PCODE: $00000394 VOL: 0
+;PCODE: $00000395 VOL: 0
+;PCODE: $00000396 VOL: 0
+;PCODE: $00000397 VOL: 0
+; 0000 0200     OCR3BL = (int)moterOCR3B & 0xff;
+;PCODE: $00000398 VOL: 0
+;PCODE: $00000399 VOL: 0
+;PCODE: $0000039A VOL: 0
+;PCODE: $0000039B VOL: 0
+; 0000 0201 
+; 0000 0202 
+; 0000 0203 
+; 0000 0204 //    OCR1CW = (OCR1CH << 8)|(OCR1CL);
+; 0000 0205 //    OCR3BW = (OCR3BH << 8)|(OCR3BL);
+; 0000 0206 
+; 0000 0207 
+; 0000 0208 //    if(OCR1A > MAX_OCR) OCR1A = MAX_OCR;
+; 0000 0209 //    if(OCR1A < MIN_OCR) OCR1A = MIN_OCR;
+; 0000 020A //
+; 0000 020B //    if(OCR1B > MAX_OCR) OCR1B = MAX_OCR;
+; 0000 020C //    if(OCR1B < MIN_OCR) OCR1B = MIN_OCR;
+; 0000 020D //
+; 0000 020E //    if(OCR1CW > MAX_OCR)
+; 0000 020F //    {
+; 0000 0210 //        OCR1CH = MAX_OCR >> 8;
+; 0000 0211 //        OCR1CL = MAX_OCR & 0xff;
+; 0000 0212 //    }
+; 0000 0213 //
+; 0000 0214 //    if(OCR1CW < MIN_OCR)
+; 0000 0215 //    {
+; 0000 0216 //        OCR1CH = MIN_OCR >> 8;
+; 0000 0217 //        OCR1CL = MIN_OCR & 0xff;
+; 0000 0218 //    }
+; 0000 0219 //
+; 0000 021A //    if(OCR3BW > MAX_OCR)
+; 0000 021B //    {
+; 0000 021C //        OCR3BH = MAX_OCR >> 8;
+; 0000 021D //        OCR3BL = MAX_OCR & 0xff;
+; 0000 021E //    }
+; 0000 021F //
+; 0000 0220 //    if(OCR3BW < MIN_OCR)
+; 0000 0221 //    {
+; 0000 0222 //        OCR3BH = MIN_OCR >> 8;
+; 0000 0223 //        OCR3BL = MIN_OCR & 0xff;
+; 0000 0224 //    }
+; 0000 0225 
+; 0000 0226 
+; 0000 0227 }
+;PCODE: $0000039C VOL: 0
+;PCODE: $0000039D VOL: 0
+;
+;void MotorStop()
+; 0000 022A {
+;PCODE: $0000039E VOL: 0
+;PCODE: $0000039F VOL: 0
+; 0000 022B 
+; 0000 022C     OCR1A = MIN_OCR;
+;PCODE: $000003A0 VOL: 0
+;PCODE: $000003A1 VOL: 0
+; 0000 022D     OCR1B = MIN_OCR;
+;PCODE: $000003A2 VOL: 0
+;PCODE: $000003A3 VOL: 0
+; 0000 022E 
+; 0000 022F     OCR1CH = MIN_OCR >> 8;
+;PCODE: $000003A4 VOL: 0
+;PCODE: $000003A5 VOL: 0
+; 0000 0230     OCR1CL = MIN_OCR & 0xff;
+;PCODE: $000003A6 VOL: 0
+;PCODE: $000003A7 VOL: 0
+; 0000 0231 
+; 0000 0232     OCR3BH = MIN_OCR >> 8;
+;PCODE: $000003A8 VOL: 0
+;PCODE: $000003A9 VOL: 0
+; 0000 0233     OCR3BL = MIN_OCR & 0xff;
+;PCODE: $000003AA VOL: 0
+;PCODE: $000003AB VOL: 0
+; 0000 0234 
+; 0000 0235 }
+;PCODE: $000003AC VOL: 0
+;PCODE: $000003AD VOL: 0
+;
+;void Interrupt_Init(void)
+; 0000 0238 {
+;PCODE: $000003AE VOL: 0
+;PCODE: $000003AF VOL: 0
+; 0000 0239     EIMSK = 0b00100000;   // INT 5번 사용허용
+;PCODE: $000003B0 VOL: 0
+;PCODE: $000003B1 VOL: 0
+; 0000 023A     EICRB = 0b00000100;   // INT 5번 logic변경시 인터럽트 발생
+;PCODE: $000003B2 VOL: 0
+;PCODE: $000003B3 VOL: 0
+; 0000 023B }
+;PCODE: $000003B4 VOL: 0
+;PCODE: $000003B5 VOL: 0
+;
+;
+;void Port_Init(void)
+; 0000 023F {
+;PCODE: $000003B6 VOL: 0
+;PCODE: $000003B7 VOL: 0
+; 0000 0240     DDRB = 0xFF;
+;PCODE: $000003B8 VOL: 0
+;PCODE: $000003B9 VOL: 0
+; 0000 0241     DDRE = 0xDF;   // 0b1101 1111
+;PCODE: $000003BA VOL: 0
+;PCODE: $000003BB VOL: 0
+; 0000 0242     PORTE = 0x00;  // 0b0000 0000
+;PCODE: $000003BC VOL: 0
+;PCODE: $000003BD VOL: 0
+; 0000 0243     PORTB = 0xFF;
+;PCODE: $000003BE VOL: 0
+;PCODE: $000003BF VOL: 0
+; 0000 0244 }
+;PCODE: $000003C0 VOL: 0
+;PCODE: $000003C1 VOL: 0
+;
+;void main(void)
+; 0000 0247 {
+;PCODE: $000003C2 VOL: 0
+; 0000 0248     // 가속도, 자이로센서 x,y,z 출력값
+; 0000 0249     int acc_x = 0, acc_y = 0, acc_z = 0;
+; 0000 024A     int gyro_x = 0, gyro_y = 0, gyro_z = 0;
+; 0000 024B     int bet = 0, bet1 = 0, time = 0;
+; 0000 024C     // 가속도센서 = 중력가속도(16384)를 기준 1로 잡음
+; 0000 024D     // 자이로센서 = gyro_config(+-250rad/sec = +-16384)로 설정되어 있을 때,
+; 0000 024E     // 1rad/sec = (16384 * 2) / 250 = 각속도 / 131
+; 0000 024F     float a_x = 0, a_y = 0, a_z = 0;
+; 0000 0250     float g_x = 0, g_y = 0, g_z = 0;
+; 0000 0251 
+; 0000 0252     float angle_ax = 0, angle_ay = 0;
+; 0000 0253     float angle_gx = 0, angle_gy = 0, angle_gz = 0;
+; 0000 0254 
+; 0000 0255     Init_USART1_IntCon();
+;PCODE: $000003C3 VOL: 0
+;PCODE: $000003C4 VOL: 0
+;PCODE: $000003C5 VOL: 0
+;PCODE: $000003C6 VOL: 0
+;PCODE: $000003C7 VOL: 0
+;	acc_x -> R16,R17
+;	acc_y -> R18,R19
+;	acc_z -> R20,R21
+;	gyro_x -> Y+54
+;	gyro_y -> Y+52
+;	gyro_z -> Y+50
+;	bet -> Y+48
+;	bet1 -> Y+46
+;	time -> Y+44
+;	a_x -> Y+40
+;	a_y -> Y+36
+;	a_z -> Y+32
+;	g_x -> Y+28
+;	g_y -> Y+24
+;	g_z -> Y+20
+;	angle_ax -> Y+16
+;	angle_ay -> Y+12
+;	angle_gx -> Y+8
+;	angle_gy -> Y+4
+;	angle_gz -> Y+0
+;PCODE: $000003C8 VOL: 0
+;PCODE: $000003C9 VOL: 0
+;PCODE: $000003CA VOL: 0
+;PCODE: $000003CB VOL: 0
+;PCODE: $000003CC VOL: 0
+;PCODE: $000003CD VOL: 0
+;PCODE: $000003CE VOL: 0
+; 0000 0256     Init_TWI();
+;PCODE: $000003CF VOL: 0
+; 0000 0257     MPU9250_Init();
+;PCODE: $000003D0 VOL: 0
+; 0000 0258     Timer_Init_IMU();
+;PCODE: $000003D1 VOL: 0
+; 0000 0259     //Calibrate_IMU(&acc_x, &acc_y, &acc_z, &gyro_x, &gyro_y, &gyro_z);
+; 0000 025A 
+; 0000 025B     Port_Init();
+;PCODE: $000003D2 VOL: 0
+; 0000 025C     Init_Timer3_BLDC();
+;PCODE: $000003D3 VOL: 0
+; 0000 025D     Init_Timer1_BLDC();
+;PCODE: $000003D4 VOL: 0
+; 0000 025E     Interrupt_Init();
+;PCODE: $000003D5 VOL: 0
+; 0000 025F 
+; 0000 0260     throttle = 0;     // main문 진입시 초기화할 때, 인터럽트가 발생되는 것을 초기화(왜 되는지는 모름..)
+;PCODE: $000003D6 VOL: 0
+;PCODE: $000003D7 VOL: 1
+; 0000 0261 
+; 0000 0262 //    while(throttle < 17000){} // 송신기로 조금 움직이면(1.1ms 이상) 그 때부터 ESC 동작활성화
+; 0000 0263 //    OCR1A = 16020;
+; 0000 0264 //    OCR1B = 16020;
+; 0000 0265 //
+; 0000 0266 //    OCR1CH = 16020 >> 8;
+; 0000 0267 //    OCR1CL = 16020 & 0xff;
+; 0000 0268 //
+; 0000 0269 //    OCR3BH = 16020 >> 8;
+; 0000 026A //    OCR3BL = 16020 & 0xff;
+; 0000 026B //    delay_ms(3000);
+; 0000 026C 
+; 0000 026D     while(1)
+;PCODE: $000003D8 VOL: 0
+; 0000 026E     {
+; 0000 026F         //이전 자이로 각도 - 상보필터를 걸쳐서 나온 값
+; 0000 0270         las_angle_gx = roll;
+;PCODE: $000003D9 VOL: 1
+;PCODE: $000003DA VOL: 1
+; 0000 0271         las_angle_gy = pitch;
+;PCODE: $000003DB VOL: 1
+;PCODE: $000003DC VOL: 1
+; 0000 0272         las_angle_gz = yaw;
+;PCODE: $000003DD VOL: 1
+;PCODE: $000003DE VOL: 1
+; 0000 0273 
+; 0000 0274         // 1.25ms Get IMU Data Period
+; 0000 0275 
+; 0000 0276         Get_Accel_Data(&acc_x,&acc_y,&acc_z);
+;PCODE: $000003DF VOL: 0
+;PCODE: $000003E0 VOL: 0
+;PCODE: $000003E1 VOL: 0
+;PCODE: $000003E2 VOL: 0
+;PCODE: $000003E3 VOL: 0
+;PCODE: $000003E4 VOL: 0
+;PCODE: $000003E5 VOL: 0
+;PCODE: $000003E6 VOL: 0
+;PCODE: $000003E7 VOL: 0
+;PCODE: $000003E8 VOL: 0
+;PCODE: $000003E9 VOL: 0
+;PCODE: $000003EA VOL: 0
+;PCODE: $000003EB VOL: 0
+;PCODE: $000003EC VOL: 0
+;PCODE: $000003ED VOL: 0
+;PCODE: $000003EE VOL: 0
+;PCODE: $000003EF VOL: 0
+;PCODE: $000003F0 VOL: 0
+;PCODE: $000003F1 VOL: 0
+;PCODE: $000003F2 VOL: 0
+;PCODE: $000003F3 VOL: 0
+;PCODE: $000003F4 VOL: 0
+; 0000 0277         Get_Gyro_Data(&gyro_x, &gyro_y, &gyro_z);
+;PCODE: $000003F5 VOL: 0
+;PCODE: $000003F6 VOL: 0
+;PCODE: $000003F7 VOL: 0
+;PCODE: $000003F8 VOL: 0
+;PCODE: $000003F9 VOL: 0
+;PCODE: $000003FA VOL: 0
+;PCODE: $000003FB VOL: 0
+; 0000 0278 
+; 0000 0279 
+; 0000 027A         Conv_Value_Acc(&a_x, &a_y, &a_z, acc_x, acc_y, acc_z);
+;PCODE: $000003FC VOL: 0
+;PCODE: $000003FD VOL: 0
+;PCODE: $000003FE VOL: 0
+;PCODE: $000003FF VOL: 0
+;PCODE: $00000400 VOL: 0
+;PCODE: $00000401 VOL: 0
+;PCODE: $00000402 VOL: 0
+;PCODE: $00000403 VOL: 0
+;PCODE: $00000404 VOL: 0
+;PCODE: $00000405 VOL: 0
+; 0000 027B         Conv_Value_Gyro(&g_x, &g_y, &g_z, gyro_x, gyro_y, gyro_z);
+;PCODE: $00000406 VOL: 0
+;PCODE: $00000407 VOL: 0
+;PCODE: $00000408 VOL: 0
+;PCODE: $00000409 VOL: 0
+;PCODE: $0000040A VOL: 0
+;PCODE: $0000040B VOL: 0
+;PCODE: $0000040C VOL: 0
+;PCODE: $0000040D VOL: 0
+;PCODE: $0000040E VOL: 0
+;PCODE: $0000040F VOL: 0
+;PCODE: $00000410 VOL: 0
+;PCODE: $00000411 VOL: 0
+;PCODE: $00000412 VOL: 0
+; 0000 027C 
+; 0000 027D 
+; 0000 027E         angle_ax = atan(a_y/a_z)*180/PI;      // x축 각도 값
+;PCODE: $00000413 VOL: 0
+;PCODE: $00000414 VOL: 0
+;PCODE: $00000415 VOL: 0
+;PCODE: $00000416 VOL: 0
+;PCODE: $00000417 VOL: 0
+;PCODE: $00000418 VOL: 0
+;PCODE: $00000419 VOL: 0
+;PCODE: $0000041A VOL: 0
+;PCODE: $0000041B VOL: 0
+;PCODE: $0000041C VOL: 0
+;PCODE: $0000041D VOL: 0
+; 0000 027F         angle_ay = atan(a_x/a_z)*180/PI;      // y축 각도 값
+;PCODE: $0000041E VOL: 0
+;PCODE: $0000041F VOL: 0
+;PCODE: $00000420 VOL: 0
+;PCODE: $00000421 VOL: 0
+;PCODE: $00000422 VOL: 0
+;PCODE: $00000423 VOL: 0
+;PCODE: $00000424 VOL: 0
+;PCODE: $00000425 VOL: 0
+;PCODE: $00000426 VOL: 0
+;PCODE: $00000427 VOL: 0
+;PCODE: $00000428 VOL: 0
+; 0000 0280 
+; 0000 0281 
+; 0000 0282         angle_gx = g_x * dt + las_angle_gx;   // 자이로센서 출력값 적분
+;PCODE: $00000429 VOL: 1
+;PCODE: $0000042A VOL: 0
+;PCODE: $0000042B VOL: 0
+;PCODE: $0000042C VOL: 1
+;PCODE: $0000042D VOL: 0
+;PCODE: $0000042E VOL: 0
+; 0000 0283         angle_gy = g_y * dt + las_angle_gy;
+;PCODE: $0000042F VOL: 1
+;PCODE: $00000430 VOL: 0
+;PCODE: $00000431 VOL: 0
+;PCODE: $00000432 VOL: 1
+;PCODE: $00000433 VOL: 0
+;PCODE: $00000434 VOL: 0
+; 0000 0284         angle_gz = g_z * dt + las_angle_gz;
+;PCODE: $00000435 VOL: 1
+;PCODE: $00000436 VOL: 0
+;PCODE: $00000437 VOL: 0
+;PCODE: $00000438 VOL: 1
+;PCODE: $00000439 VOL: 0
+;PCODE: $0000043A VOL: 0
+; 0000 0285 
+; 0000 0286         // 상보필터 적용
+; 0000 0287         roll = alpha* angle_gx + (1.000 - alpha)*angle_ax;
+;PCODE: $0000043B VOL: 0
+;PCODE: $0000043C VOL: 1
+;PCODE: $0000043D VOL: 0
+;PCODE: $0000043E VOL: 0
+;PCODE: $0000043F VOL: 0
+;PCODE: $00000440 VOL: 1
+;PCODE: $00000441 VOL: 0
+;PCODE: $00000442 VOL: 0
+;PCODE: $00000443 VOL: 0
+;PCODE: $00000444 VOL: 0
+;PCODE: $00000445 VOL: 0
+;PCODE: $00000446 VOL: 1
+; 0000 0288         pitch = alpha* angle_gy + (1.000 - alpha)*angle_ay;
+;PCODE: $00000447 VOL: 0
+;PCODE: $00000448 VOL: 1
+;PCODE: $00000449 VOL: 0
+;PCODE: $0000044A VOL: 0
+;PCODE: $0000044B VOL: 0
+;PCODE: $0000044C VOL: 1
+;PCODE: $0000044D VOL: 0
+;PCODE: $0000044E VOL: 0
+;PCODE: $0000044F VOL: 0
+;PCODE: $00000450 VOL: 0
+;PCODE: $00000451 VOL: 0
+;PCODE: $00000452 VOL: 1
+; 0000 0289         yaw = angle_gz;
+;PCODE: $00000453 VOL: 0
+;PCODE: $00000454 VOL: 1
+; 0000 028A 
+; 0000 028B 
+; 0000 028C 
+; 0000 028D         bet = cnt;
+;PCODE: $00000455 VOL: 0
+;PCODE: $00000456 VOL: 0
+; 0000 028E         // LPF필터적용
+; 0000 028F         Lowpass_filter(&f_roll,&pre_roll,&roll);
+;PCODE: $00000457 VOL: 0
+;PCODE: $00000458 VOL: 0
+;PCODE: $00000459 VOL: 0
+;PCODE: $0000045A VOL: 0
+;PCODE: $0000045B VOL: 1
+;PCODE: $0000045C VOL: 0
+;PCODE: $0000045D VOL: 0
+; 0000 0290         pre_roll = f_roll;
+;PCODE: $0000045E VOL: 0
+;PCODE: $0000045F VOL: 0
+; 0000 0291 
+; 0000 0292         Lowpass_filter(&f_pitch,&pre_pitch,&pitch);
+;PCODE: $00000460 VOL: 0
+;PCODE: $00000461 VOL: 0
+;PCODE: $00000462 VOL: 0
+;PCODE: $00000463 VOL: 0
+;PCODE: $00000464 VOL: 1
+;PCODE: $00000465 VOL: 0
+;PCODE: $00000466 VOL: 0
+; 0000 0293         pre_pitch = f_pitch;
+;PCODE: $00000467 VOL: 0
+;PCODE: $00000468 VOL: 0
+; 0000 0294 
+; 0000 0295         bet1 = cnt;
+;PCODE: $00000469 VOL: 0
+;PCODE: $0000046A VOL: 0
+; 0000 0296         time = bet1 - bet;
+;PCODE: $0000046B VOL: 0
+;PCODE: $0000046C VOL: 0
+;PCODE: $0000046D VOL: 0
+;PCODE: $0000046E VOL: 0
+; 0000 0297         dt = Over_Time * time;
+;PCODE: $0000046F VOL: 0
+;PCODE: $00000470 VOL: 0
+;PCODE: $00000471 VOL: 0
+;PCODE: $00000472 VOL: 0
+;PCODE: $00000473 VOL: 1
+; 0000 0298         sprintf(msg,"%.3f %d %d\n", dt, bet, bet1);
+;PCODE: $00000474 VOL: 0
+;PCODE: $00000475 VOL: 0
+;PCODE: $00000476 VOL: 0
+;PCODE: $00000477 VOL: 0
+;PCODE: $00000478 VOL: 0
+;PCODE: $00000479 VOL: 1
+;PCODE: $0000047A VOL: 0
+;PCODE: $0000047B VOL: 0
+;PCODE: $0000047C VOL: 0
+;PCODE: $0000047D VOL: 0
+;PCODE: $0000047E VOL: 0
+;PCODE: $0000047F VOL: 0
+;PCODE: $00000480 VOL: 0
+;PCODE: $00000481 VOL: 0
+;PCODE: $00000482 VOL: 0
+;PCODE: $00000483 VOL: 0
+;PCODE: $00000484 VOL: 0
+; 0000 0299         puts_USART1(msg);   //문자열 msg1출력
+;PCODE: $00000485 VOL: 0
+;PCODE: $00000486 VOL: 0
+;PCODE: $00000487 VOL: 0
+; 0000 029A         cnt = 0;
+;PCODE: $00000488 VOL: 0
+; 0000 029B 
+; 0000 029C         // PID 적용 모터 구동
+; 0000 029D         CalcMotorPID();
+;PCODE: $00000489 VOL: 0
+; 0000 029E         MotorSpeed();
+;PCODE: $0000048A VOL: 0
+; 0000 029F 
+; 0000 02A0         if(stop_flag)
+;PCODE: $0000048B VOL: 0
+;PCODE: $0000048C VOL: 0
+;PCODE: $0000048D VOL: 0
+; 0000 02A1         {
+; 0000 02A2             MotorStop();
+;PCODE: $0000048E VOL: 0
+; 0000 02A3 
+; 0000 02A4         }
+; 0000 02A5 
+; 0000 02A6 //        if(timeflag_2ms)
+; 0000 02A7 //        {
+; 0000 02A8 //            //sprintf(msg,"%.3f %.3f %d %d %.3f %.3f\n", pitch_kp,f_pitch, OCR1A,OCR1B,moterOCR1C,moterOCR3B);
+; 0000 02A9 //            //sprintf(msg,"%.3f %.3f %.3f %.3f %.3f %.3f %.3f %d\n", a_x, a_y, a_z, g_x, g_y, g_z, f_pitch, OCR1A);
+; 0000 02AA //            sprintf(msg,"%.3f %d\n", pitch, OCR1A);
+; 0000 02AB //            //sprintf(msg,"%.3f \n", pitch);
+; 0000 02AC //            //sprintf(msg,"%.3f %.3f %.3f %.3f %d\n", pitch_kp, pitch_ki, pitch_kd, f_pitch, OCR1A);
+; 0000 02AD //            puts_USART1(msg);   //문자열 msg1출력
+; 0000 02AE //            timeflag_2ms = 0;
+; 0000 02AF //            time_count = 0;
+; 0000 02B0 //        }
+; 0000 02B1 
+; 0000 02B2 //        dt = 0.000;                           // dt 초기화
+; 0000 02B3 
+; 0000 02B4 
+; 0000 02B5     }
+;PCODE: $0000048F VOL: 0
+;PCODE: $00000490 VOL: 0
+;PCODE: $00000491 VOL: 0
+; 0000 02B6 }
+;PCODE: $00000492 VOL: 0
+;PCODE: $00000493 VOL: 0
+;PCODE: $00000494 VOL: 0
+;PCODE: $00000495 VOL: 0
